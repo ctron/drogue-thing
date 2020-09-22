@@ -2,6 +2,8 @@
 
 An example device, implemented with Drogue IoT in Rust.
 
+NOTE: This is mostly my personal example project and playground.
+
 ## Pre-requisites
 
 * STM32F723E-DISCOVERY board

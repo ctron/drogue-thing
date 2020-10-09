@@ -50,7 +50,7 @@ use stm32f4xx_hal as hal;
 #[cfg(feature = "stm32f4xx")]
 use stm32f4xx_hal::stm32 as device;
 
-//#[cfg(feature = "stm32f7xx")]
+#[cfg(feature = "stm32f7xx")]
 use cortex_m::peripheral::DWT;
 #[cfg(feature = "stm32f7xx")]
 use stm32f7 as _;
@@ -405,7 +405,7 @@ const APP: () = {
         // Initialize (enable) the monotonic timer (CYCCNT)
         core.DCB.enable_trace();
         // required on Cortex-M7 devices that software lock the DWT (e.g. STM32F7)
-        //#[cfg(feature = "stm32f7xx")]
+        #[cfg(feature = "stm32f7xx")]
         DWT::unlock();
         core.DWT.enable_cycle_counter();
 

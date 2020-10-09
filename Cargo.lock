@@ -11,12 +11,13 @@ dependencies = [
 
 [[package]]
 name = "as-slice"
-version = "0.1.3"
+version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "37dfb65bc03b2bc85ee827004f14a6817e04160e3b1a28931986a666a9290e70"
+checksum = "bb4d1c23475b74e3672afa8c2be22040b8b7783ad9b461021144ed10a46bb0e6"
 dependencies = [
  "generic-array 0.12.3",
  "generic-array 0.13.2",
+ "generic-array 0.14.4",
  "stable_deref_trait",
 ]
 
@@ -153,6 +154,33 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7313c0d620d0cb4dbd9d019e461a4beb501071ff46ec0ab933efb4daa76d73e3"
 
 [[package]]
+name = "doc-comment"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fea41bba32d969b513997752735605054bc0dfa92b4c56bf1189f2e174be7a10"
+
+[[package]]
+name = "drogue-bme680"
+version = "0.2.0"
+dependencies = [
+ "bitfield",
+ "drogue-embedded-timer",
+ "embedded-hal",
+ "embedded-time",
+ "log",
+]
+
+[[package]]
+name = "drogue-embedded-timer"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b3ce16cc5d5c92fb06649f6d01bbca2d9cfa0db1b09b09e1a033b009fd79b38a"
+dependencies = [
+ "cortex-m",
+ "embedded-time",
+]
+
+[[package]]
 name = "drogue-esp8266"
 version = "0.2.0"
 dependencies = [
@@ -176,12 +204,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "drogue-http-client"
+version = "0.0.2"
+dependencies = [
+ "drogue-network",
+ "heapless",
+ "httparse",
+ "log",
+ "nb 1.0.0",
+]
+
+[[package]]
 name = "drogue-network"
 version = "0.2.0"
 dependencies = [
- "embedded-nal",
  "heapless",
- "nb 0.1.3",
+ "nb 1.0.0",
+ "no-std-net",
 ]
 
 [[package]]
@@ -191,10 +230,14 @@ dependencies = [
  "cortex-m",
  "cortex-m-rt",
  "cortex-m-rtic",
+ "drogue-bme680",
+ "drogue-embedded-timer",
  "drogue-esp8266",
+ "drogue-http-client",
  "drogue-network",
  "drogue-tls",
  "embedded-hal",
+ "embedded-time",
  "heapless",
  "log",
  "panic-rtt-target",
@@ -202,8 +245,12 @@ dependencies = [
  "rtt-target",
  "serde",
  "serde-json-core",
+ "snafu",
+ "stm32f4",
+ "stm32f4xx-hal",
  "stm32f7",
  "stm32f7xx-hal",
+ "void",
 ]
 
 [[package]]
@@ -239,14 +286,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "embedded-nal"
-version = "0.1.0"
+name = "embedded-time"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ae46eb1b02de5a76d9d0ea21d657ff5b0ad2cc47f3a7723608227b1dd1b3eb18"
+checksum = "bb234982020886c2f30a99ae5ff5c8de237e72bfdc464f06e5b83c8dd177e190"
 dependencies = [
- "heapless",
- "nb 1.0.0",
- "no-std-net",
+ "num",
 ]
 
 [[package]]
@@ -268,6 +313,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "generic-array"
+version = "0.14.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "501466ecc8a30d1d3b7fc9229b122b2ce8ed6e9d9223f1138d4babb253e51817"
+dependencies = [
+ "typenum",
+ "version_check",
+]
+
+[[package]]
 name = "hash32"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -278,21 +333,27 @@ dependencies = [
 
 [[package]]
 name = "hashbrown"
-version = "0.9.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "00d63df3d41950fb462ed38308eea019113ad1508da725bbedcd0fa5a85ef5f7"
+checksum = "d7afe4a420e3fe79967a00898cc1f4db7c8a49a9333a29f8a4bd76a253d5cd04"
 
 [[package]]
 name = "heapless"
-version = "0.5.5"
+version = "0.5.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "73a8a2391a3bc70b31f60e7a90daa5755a360559c0b6b9c5cfc0fee482362dc0"
+checksum = "74911a68a1658cfcfb61bc0ccfbd536e3b6e906f8c2f7883ee50157e3e2184f1"
 dependencies = [
  "as-slice",
  "generic-array 0.13.2",
  "hash32",
  "stable_deref_trait",
 ]
+
+[[package]]
+name = "httparse"
+version = "1.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cd179ae861f0c2e53da70d892f5f3029f9594be0c41dc5269cd371691b1dc2f9"
 
 [[package]]
 name = "indexmap"
@@ -321,9 +382,9 @@ checksum = "3728d817d99e5ac407411fa471ff9800a778d88a24685968b36824eaf4bee400"
 
 [[package]]
 name = "micromath"
-version = "1.0.1"
+version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cedf8513604f9696e9ed523511dd27e7ccb5502e414958f1669e492c7d85dcf1"
+checksum = "be00a244d4394124986da477e8b2814dcb7995ab238817d9037bc336c4b0b843"
 
 [[package]]
 name = "moveslice"
@@ -363,6 +424,69 @@ dependencies = [
 ]
 
 [[package]]
+name = "num"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ab3e176191bc4faad357e3122c4747aa098ac880e88b168f106386128736cf4a"
+dependencies = [
+ "num-complex",
+ "num-integer",
+ "num-iter",
+ "num-rational",
+ "num-traits",
+]
+
+[[package]]
+name = "num-complex"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b05ad05bd8977050b171b3f6b48175fea6e0565b7981059b486075e1026a9fb5"
+dependencies = [
+ "num-traits",
+]
+
+[[package]]
+name = "num-integer"
+version = "0.1.43"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8d59457e662d541ba17869cf51cf177c0b5f0cbf476c66bdc90bf1edac4f875b"
+dependencies = [
+ "autocfg",
+ "num-traits",
+]
+
+[[package]]
+name = "num-iter"
+version = "0.1.41"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7a6e6b7c748f995c4c29c5f5ae0248536e04a5739927c74ec0fa564805094b9f"
+dependencies = [
+ "autocfg",
+ "num-integer",
+ "num-traits",
+]
+
+[[package]]
+name = "num-rational"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a5b4d7360f362cfb50dde8143501e6940b22f644be75a4cc90b2d81968908138"
+dependencies = [
+ "autocfg",
+ "num-integer",
+ "num-traits",
+]
+
+[[package]]
+name = "num-traits"
+version = "0.2.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ac267bcc07f48ee5f8935ab0d24f316fb722d7a1292e2913f0cc196b29ffd611"
+dependencies = [
+ "autocfg",
+]
+
+[[package]]
 name = "panic-rtt-target"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -374,9 +498,9 @@ dependencies = [
 
 [[package]]
 name = "proc-macro2"
-version = "1.0.21"
+version = "1.0.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "36e28516df94f3dd551a587da5357459d9b36d945a7c37c3557928c1c2ff2a2c"
+checksum = "1e0704ee1a7e00d7bb417d0770ea303c1bccbabf0ef1667dae92b5967f5f8a71"
 dependencies = [
  "unicode-xid",
 ]
@@ -395,6 +519,12 @@ name = "r0"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e2a38df5b15c8d5c7e8654189744d8e396bddc18ad48041a500ce52d6948941f"
+
+[[package]]
+name = "rand_core"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "90bde5296fc891b0cef12a6d03ddccc162ce7b2aff54160af9338f8d40df6d19"
 
 [[package]]
 name = "rtic-core"
@@ -488,10 +618,60 @@ dependencies = [
 ]
 
 [[package]]
+name = "snafu"
+version = "0.6.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9c4e6046e4691afe918fd1b603fd6e515bcda5388a1092a9edbada307d159f09"
+dependencies = [
+ "doc-comment",
+ "snafu-derive",
+]
+
+[[package]]
+name = "snafu-derive"
+version = "0.6.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7073448732a89f2f3e6581989106067f403d378faeafb4a50812eb814170d3e5"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "stable_deref_trait"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a8f112729512f8e442d81f95a8a7ddf2b7c6b8a1a6f509a95864142b30cab2d3"
+
+[[package]]
+name = "stm32f4"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "11460b4de3a84f072e2cf6e76306c64d27f405a0e83bace0a726f555ddf4bf33"
+dependencies = [
+ "bare-metal",
+ "cortex-m",
+ "cortex-m-rt",
+ "vcell",
+]
+
+[[package]]
+name = "stm32f4xx-hal"
+version = "0.8.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b3a2f044469d1e3aff2cd02bee8b2724f3d5d91f3175e5d1ec99770320d16192"
+dependencies = [
+ "bare-metal",
+ "cast",
+ "cortex-m",
+ "cortex-m-rt",
+ "embedded-hal",
+ "nb 0.1.3",
+ "rand_core",
+ "stm32f4",
+ "void",
+]
 
 [[package]]
 name = "stm32f7"
@@ -523,9 +703,9 @@ dependencies = [
 
 [[package]]
 name = "syn"
-version = "1.0.41"
+version = "1.0.42"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6690e3e9f692504b941dc6c3b188fd28df054f7fb8469ab40680df52fdcc842b"
+checksum = "9c51d92969d209b54a98397e1b91c8ae82d8c87a7bb87df0b29aa2ad81454228"
 dependencies = [
  "proc-macro2",
  "quote",

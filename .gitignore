@@ -5,3 +5,7 @@ target/
 # IntelliJ
 
 .idea/
+
+# WiFi credentials
+
+src/wifi.*.txt

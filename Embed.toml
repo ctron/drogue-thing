@@ -27,7 +27,8 @@ restore_unwritten_bytes = false
 # The chip name of the chip to be debugged.
 # chip = "name"
 #chip = "STM32F103C8"
-chip = "STM32F723IEKx"
+#chip = "STM32F723IEKx"
+chip = "STM32F411RETx"
 # A list of chip descriptions to be loaded during runtime.
 chip_descriptions = []
 # The default log level to be used.

@@ -104,7 +104,7 @@ const DIGEST_DELAY: u32 = 100;
 const ENDPOINT: &str = "http-endpoint-drogue-iot.apps.wonderful.iot-playground.org";
 const ENDPOINT_PORT: u16 = 443;
 
-const LOGGER: RTTLogger = RTTLogger::new(LevelFilter::Debug);
+const LOGGER: RTTLogger = RTTLogger::new(LevelFilter::Info);
 
 const SSL_HEAP_SIZE: usize = 48 * 1024;
 
@@ -396,7 +396,7 @@ const APP: () = {
     fn init(ctx: init::Context) -> init::LateResources {
         rtt_init_print!(NoBlockSkip, 1024);
         log::set_logger(&LOGGER).unwrap();
-        log::set_max_level(log::LevelFilter::Debug);
+        log::set_max_level(log::LevelFilter::Trace);
 
         let mut core = ctx.core;
         let device = ctx.device;
@@ -690,7 +690,7 @@ const APP: () = {
     // spare interrupt used for scheduling software tasks
     extern "C" {
         fn SPI1();
-        //fn SPI2();
+        fn SPI2();
         fn SPI3();
         fn SPI4();
         fn SPI5();

@@ -5,11 +5,15 @@ authors = ["Jens Reimann <jreimann@redhat.com>"]
 edition = "2018"
 license = "Apache-2.0"
 
+[unstable]
+features = ["host_dep"]
+
 [features]
 custom_wifi = []
 wait = [] # wait on startup for user button
 stm32f4xx = []
 stm32f7xx = []
+display = ["embedded-graphics", "ssd1351"]
 
 stm32f411 = [
     "stm32f4xx",
@@ -28,6 +32,10 @@ stm32f723 = [
     "stm32f7xx-hal/rt"
 ]
 
+mpu = ["cortex-mpu"]
+bsec = ["drogue-bsec"]
+publish = []
+
 [dependencies]
 
 # Basics
@@ -36,7 +44,11 @@ embedded-hal = "0.2"
 embedded-time = "0.10"
 void = { version = "1", default-features = false }
 
+embedded-graphics = { version = "0.6", optional = true }
+ssd1351 = { version = "0.3", features = ["graphics"], optional = true }
+
 heapless = "0.5"
+
 #nb = "1"
 
 # Cortex M
@@ -44,6 +56,7 @@ heapless = "0.5"
 cortex-m = "0.6"
 cortex-m-rt = "0.6"
 cortex-m-rtic = "0.5"
+cortex-mpu = { version = "0.4", optional = true }
 
 # STM32F4xx
 
@@ -57,12 +70,13 @@ stm32f7xx-hal = { version = "0.2", optional = true }
 
 # Network
 
-drogue-esp8266 = { version = "0.2", features = [] } # 2k
+drogue-esp8266 = { version = "0.3.1", features = [] } # 2k
 drogue-http-client = "0.0.2"
 drogue-network = "0.2"
-drogue-tls = "0.1"
+drogue-tls = { version = "0.1", features = ["fewer-tables", "out-buffer-2k"] }
 drogue-bme680 = "0.2"
 drogue-embedded-timer = "0.2.1"
+drogue-bsec = { version = "0.1", optional = true }
 
 # Logging
 
@@ -87,11 +101,25 @@ lto = true # better optimizations
 
 [patch.crates-io]
 #stm32f7xx-hal = { git = "https://github.com/stm32-rs/stm32f7xx-hal.git" }
-drogue-http-client = { path = "../drogue-http-client" }
-drogue-esp8266 = { path = "../drogue-esp8266" }
-drogue-bme680 = { path = "../drogue-bme680" }
-drogue-network = { path = "../drogue-network" }
+#drogue-http-client = { path = "../drogue-http-client" }
+#drogue-esp8266 = { path = "../drogue-esp8266" }
+#drogue-bme680 = { path = "../drogue-bme680" }
+
+drogue-bsec = { path = "../drogue-bsec" }
+
+#drogue-network = { path = "../drogue-network" }
+#drogue-network = { git = "https://github.com/drogue-iot/drogue-network.git" }
+
 drogue-tls = { path = "../drogue-tls/drogue-tls" }
 drogue-tls-sys = { path = "../drogue-tls/drogue-tls-sys" }
-stm32f7xx-hal = { path = "../stm32f7xx-hal" }
+
+#stm32f7xx-hal = { path = "../stm32f7xx-hal" }
+# Required for UART5 until a new version has been released
+stm32f7xx-hal = { git = "https://github.com/stm32-rs/stm32f7xx-hal.git" }
+
 #drogue-embedded-timer = { path = "../drogue-embedded-timer" }
+# Required for DelayMs/DelayUs trait implementation which is not yet released
+drogue-embedded-timer = { git = "https://github.com/drogue-iot/drogue-embedded-timer.git" }
+
+# ssd1351 = { path = "../ssd1351" }
+ssd1351 = { git = "https://github.com/ctron/ssd1351.git", branch = "feature/update_deps_1" }

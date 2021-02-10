@@ -2,6 +2,8 @@
 #![no_main]
 
 mod data;
+#[cfg(feature = "display")]
+mod display;
 mod error;
 
 use panic_rtt_target as _;
@@ -13,6 +15,7 @@ use heapless::{consts, i, spsc::Queue, String};
 use drogue_bme680::{
     Address, Bme680Controller, Bme680Sensor, Configuration, DelayWrapper, StaticProvider,
 };
+
 use drogue_embedded_timer::{MillisecondsClock10, MillisecondsTicker10};
 use drogue_esp8266::{
     adapter::Adapter, ingress::Ingress, initialize, network::Esp8266IpNetworkDriver,
@@ -34,11 +37,20 @@ use drogue_tls::{
 use log::{info, warn, LevelFilter};
 
 use rtic::app;
-use rtic::cyccnt::U32Ext as RticU32Ext;
+use rtic::cyccnt::U32Ext as _;
+
+#[cfg(all(feature = "stm32f4xx", feature = "mpu"))]
+use cortex_mpu::{
+    cortex_m4::{MemoryAttributes, Region},
+    AccessPermission, ArrayVec,
+};
+
+use cortex_m_rt::exception;
+
+use embedded_hal::timer::Periodic;
 
 #[cfg(feature = "wait")]
 use embedded_hal::digital::v2::InputPin;
-use embedded_hal::digital::v2::OutputPin;
 
 use rtt_logger::RTTLogger;
 use rtt_target::rtt_init_print;
@@ -79,6 +91,25 @@ use stm32f4xx_hal::gpio::{
     gpioc::{PC6, PC7},
     AlternateOD, AF4, AF7, AF8,
 };
+#[cfg(all(feature = "stm32f411", feature = "display"))]
+use stm32f4xx_hal::{
+    gpio::{
+        gpioa::{PA5, PA6, PA7},
+        gpioc::{PC4, PC5},
+        AF5,
+    },
+    spi::Spi,
+};
+
+#[cfg(all(feature = "stm32f411", feature = "display"))]
+use stm32f4::stm32f411::SPI1;
+
+#[cfg(feature = "display")]
+use embedded_hal::digital::v2::OutputPin;
+#[cfg(feature = "display")]
+use embedded_hal::spi::MODE_0;
+#[cfg(feature = "display")]
+use hal::gpio::{Output, PushPull};
 
 #[cfg(feature = "stm32f7xx")]
 use stm32f7xx_hal::i2c::{self, BlockingI2c};
@@ -96,12 +127,36 @@ use stm32f7xx_hal::{
     pac::UART5,
 };
 
+#[cfg(feature = "display")]
+use crate::display::{Display, State};
 use crate::{data::Data, error::ThingError};
+
 use drogue_network::addr::Ipv4Addr;
+
+use embedded_time::{
+    duration::{Extensions, Seconds},
+    rate::Hertz,
+    Clock, Instant,
+};
+
+#[cfg(feature = "mpu")]
+use cortex_mpu::{
+    cortex_m4::{CachePolicy, Mpu},
+    Size, Subregions,
+};
+
+use cortex_m_rt::heap_start;
+
+use core::convert::TryInto;
+#[cfg(feature = "bsec")]
+use drogue_bsec::{self as bsec, Inputs, Outputs, SampleRate};
+use embedded_time::duration::Milliseconds;
 
 const DIGEST_DELAY: u32 = 100;
 
+#[cfg(feature = "publish")]
 const ENDPOINT: &str = "http-endpoint-drogue-iot.apps.wonderful.iot-playground.org";
+#[cfg(feature = "publish")]
 const ENDPOINT_PORT: u16 = 443;
 
 const LOGGER: RTTLogger = RTTLogger::new(LevelFilter::Info);
@@ -124,11 +179,13 @@ pub trait I2cConfig<Instance> {
 
 #[cfg(feature = "stm32f411")]
 type I2CInstance = I2C1;
+
 #[cfg(feature = "stm32f411")]
 impl<Instance> I2cConfig<Instance> for I2C1 {
     type SclPin = PB8<AlternateOD<AF4>>;
     type SdaPin = PB9<AlternateOD<AF4>>;
 }
+
 #[cfg(feature = "stm32f411")]
 type I2cBmeInstance = hal::i2c::I2c<
     I2CInstance,
@@ -140,11 +197,13 @@ type I2cBmeInstance = hal::i2c::I2c<
 
 #[cfg(feature = "stm32f723")]
 type I2CInstance = I2C2;
+
 #[cfg(feature = "stm32f723")]
 impl<Instance> I2cConfig<Instance> for I2C2 {
     type SclPin = PH4<Alternate<AF4>>;
     type SdaPin = PH5<Alternate<AF4>>;
 }
+
 #[cfg(feature = "stm32f723")]
 type I2cBmeInstance = hal::i2c::BlockingI2c<
     I2CInstance,
@@ -162,12 +221,14 @@ trait SerialConfig<Instance> {
 
 #[cfg(feature = "stm32f411")]
 type SerialInstance = USART1;
+
 #[cfg(feature = "stm32f411")]
 impl<Instance> SerialConfig<Instance> for USART1 {
     type TxPin = PA9<Alternate<AF7>>;
     type RxPin = PA10<Alternate<AF7>>;
     type Pins = (Self::TxPin, Self::RxPin);
 }
+
 #[cfg(feature = "stm32f411")]
 impl<Instance> SerialConfig<Instance> for USART6 {
     type TxPin = PC6<Alternate<AF8>>;
@@ -177,6 +238,7 @@ impl<Instance> SerialConfig<Instance> for USART6 {
 
 #[cfg(feature = "stm32f723")]
 type SerialInstance = UART5;
+
 #[cfg(feature = "stm32f723")]
 impl<Instance> SerialConfig<Instance> for UART5 {
     type TxPin = PC12<Alternate<AF8>>;
@@ -189,12 +251,34 @@ type SerialRx = Rx<SerialInstance>;
 type SerialEsp = Serial<SerialInstance, <SerialInstance as SerialConfig<SerialInstance>>::Pins>;
 type ESPAdapter = Adapter<'static, SerialTx>;
 
-static CLOCK: MillisecondsClock10 = MillisecondsClock10::new();
+type ClockType = MillisecondsClock10;
 
-type Bme680 =
-    Bme680Controller<I2cBmeInstance, DelayWrapper<'static, MillisecondsClock10>, StaticProvider>;
+static CLOCK: ClockType = MillisecondsClock10::new();
+
+type Bme680 = Bme680Controller<I2cBmeInstance, DelayWrapper<'static, ClockType>, StaticProvider>;
 
 type NetworkStack = SslTcpStack<Esp8266IpNetworkDriver<'static, SerialTx>>;
+
+#[exception]
+fn MemoryManagement() -> ! {
+    panic!("Memory management error")
+}
+
+#[exception]
+fn HardFault(ef: &cortex_m_rt::ExceptionFrame) -> ! {
+    // prints the exception frame as a panic message
+    panic!("{:#?}", ef);
+}
+
+#[exception]
+fn BusFault() -> ! {
+    panic!("Bus fault");
+}
+
+#[exception]
+fn UsageFault() -> ! {
+    panic!("Usage fault");
+}
 
 #[cfg(feature = "stm32f411")]
 fn create_serial(
@@ -216,6 +300,7 @@ fn create_serial(
     )
     .unwrap()
 }
+
 #[cfg(feature = "stm32f7xx")]
 fn create_serial(
     clocks: Clocks,
@@ -246,6 +331,7 @@ const WIFI_SSID: &'static str = include_str!("wifi.ssid.txt");
 const WIFI_PASSWORD: &'static str = include_str!("wifi.password.txt");
 
 /// Try joining the local Wi-Fi
+#[cfg(feature = "publish")]
 fn try_join<Tx>(adapter: &mut Adapter<'_, Tx>) -> Result<(), ThingError>
 where
     Tx: embedded_hal::serial::Write<u8>,
@@ -279,10 +365,19 @@ where
 }
 
 /// Publish data to the cloud
-fn publish<T>(network: &mut T, data: Data) -> Result<(), ThingError>
+#[cfg(feature = "publish")]
+fn publish<T>(
+    network: &mut T,
+    data: Data,
+    display: &mut Option<DisplayInstance>,
+) -> Result<(), ThingError>
 where
     T: TcpStack + Dns,
 {
+    if let Some(display) = display {
+        display.set_state(State::Connecting);
+    }
+
     log::info!("Resolve IP address");
     let addr = network
         .gethostbyname(ENDPOINT, AddrType::IPv4)
@@ -299,7 +394,7 @@ where
         .map_err(|_| ThingError::FailedToPublish)?;
 
     log::info!("do publish");
-    let result = do_publish::<T>(network, &mut socket, data);
+    let result = do_publish::<T>(network, &mut socket, data, display);
 
     info!("Closing socket");
     let r = network.close(socket);
@@ -308,7 +403,13 @@ where
     result
 }
 
-fn do_publish<T>(network: &mut T, socket: &mut T::TcpSocket, data: Data) -> Result<(), ThingError>
+#[cfg(feature = "publish")]
+fn do_publish<T>(
+    network: &mut T,
+    socket: &mut T::TcpSocket,
+    data: Data,
+    display: &mut Option<DisplayInstance>,
+) -> Result<(), ThingError>
 where
     T: TcpStack,
 {
@@ -323,11 +424,26 @@ where
 
     log::info!("Starting request...");
 
+    if let Some(display) = display {
+        display.set_state(State::SendingHeaders);
+    }
+
     let mut req = con
-        .post("/publish/telemetry")
-        .headers(&[("Host", ENDPOINT), ("Content-Type", "text/json")])
+        .post("/v1/telemetry")
+        .headers(&[
+            ("Host", ENDPOINT),
+            ("Content-Type", "text/json"),
+            (
+                "Authorization",
+                "Basic Y3Ryb24tc3RtMzJmNDExQGFwcDE6aGV5LXJvZG5leQ==",
+            ),
+        ])
         .handler(handler)
         .execute_with::<_, consts::U512>(&mut tcp, Some(data.as_ref()));
+
+    if let Some(display) = display {
+        display.set_state(State::SendingPayload);
+    }
 
     log::info!("Request sent, piping data...");
 
@@ -345,14 +461,19 @@ where
         from_utf8(handler.payload())
     );
 
+    if let Some(display) = display {
+        display.set_result(handler.code() as i32);
+    }
+
     Ok(())
 }
 
+#[cfg(feature = "publish")]
 fn create_network(
     network: Esp8266IpNetworkDriver<SerialTx>,
 ) -> Result<SslTcpStack<Esp8266IpNetworkDriver<SerialTx>>, ThingError> {
     // create SSL
-    let start = cortex_m_rt::heap_start() as usize;
+    let start = heap_start() as usize;
     info!("heap start: 0x{:0x?}", start);
 
     let mut ssl_platform =
@@ -377,6 +498,38 @@ fn create_network(
     Ok(SslTcpStack::new(ssl_config, network))
 }
 
+type DisplayInstance = crate::display::Display<
+    Spi<
+        SPI1,
+        (
+            PA5<Alternate<AF5>>,
+            PA6<Alternate<AF5>>,
+            PA7<Alternate<AF5>>,
+        ),
+    >,
+    PC5<Output<PushPull>>,
+    PC4<Output<PushPull>>,
+>;
+
+#[cfg(feature = "mpu")]
+fn end_of_heap(size: Size) -> usize {
+    let mut end = heap_start() as usize;
+    end += SSL_HEAP_SIZE;
+
+    let al = (1 << size.bits()) as usize;
+    let diff = end % al;
+    if diff != 0 {
+        end += al - diff;
+    }
+
+    end
+}
+
+#[cfg(feature = "bsec")]
+type Bsec = drogue_bsec::Bsec;
+#[cfg(not(feature = "bsec"))]
+type Bsec = ();
+
 #[app(device = crate::device, peripherals = true, monotonic = rtic::cyccnt::CYCCNT)]
 const APP: () = {
     struct Resources {
@@ -385,21 +538,55 @@ const APP: () = {
         adapter: Option<ESPAdapter>,
         ingress: Ingress<'static, SerialRx>,
 
-        ticker: MillisecondsTicker10<'static, MillisecondsClock10, Timer, fn(&mut Timer)>,
+        ticker: MillisecondsTicker10<'static, ClockType, Timer, fn(&mut Timer)>,
 
         sensor_i2c: Option<I2cBmeInstance>,
         #[init(None)]
         sensor: Option<Bme680>,
+        display: Option<DisplayInstance>,
+        #[init(0)]
+        updates: u32,
+        bsec: Bsec,
     }
 
     #[init(spawn = [digest, join, init_sensor])]
     fn init(ctx: init::Context) -> init::LateResources {
-        rtt_init_print!(NoBlockSkip, 1024);
+        //rtt_init_print!(NoBlockSkip, 1024);
+        rtt_init_print!(BlockIfFull, 1024);
         log::set_logger(&LOGGER).unwrap();
         log::set_max_level(log::LevelFilter::Trace);
 
         let mut core = ctx.core;
         let device = ctx.device;
+
+        // enable MPU
+        #[cfg(all(feature = "stm32f4xx", feature = "mpu"))]
+        {
+            let mut regions = ArrayVec::new();
+            let size = Size::S32B;
+            let base = end_of_heap(size);
+            regions.push(Region {
+                base_addr: base,
+                size,
+                subregions: Subregions::ALL,
+                executable: false,
+                permissions: AccessPermission::NoAccess,
+                attributes: MemoryAttributes::Normal {
+                    shareable: false,
+                    cache_policy: CachePolicy::NonCacheable,
+                },
+            });
+            log::info!("Configure MPU - base: {:04x}, {:?}", base, size);
+            let mut mpu = unsafe { Mpu::new(core.MPU) };
+            mpu.configure_unprivileged(&regions);
+
+            /*
+            unsafe {
+                let ptr = base as *mut u8;
+                *ptr = 0;
+            }
+            */
+        }
 
         // Enable CYCNT
         // Initialize (enable) the monotonic timer (CYCCNT)
@@ -506,12 +693,14 @@ const APP: () = {
             hal::timer::Timer::tim2(device.TIM2, 100.hz(), clocks, &mut rcc.apb1);
 
         hal_hz_timer.listen(Event::TimeOut);
-        let ticker = CLOCK.ticker(
+        let mut ticker = CLOCK.ticker(
             hal_hz_timer,
             (|t| {
+                #[cfg(feature = "stm32f4xx")]
                 t.clear_interrupt(Event::TimeOut);
             }) as fn(&mut Timer),
         );
+        ticker.tick();
 
         // init i2c
 
@@ -544,6 +733,63 @@ const APP: () = {
             1000,
         );
 
+        #[cfg(feature = "display")]
+        let display = if cfg!(feature = "display") {
+            info!("Init display");
+
+            // init display
+            let mosi = gpioa.pa7.into_alternate_af5();
+            let miso = gpioa.pa6.into_alternate_af5();
+            let sck = gpioa.pa5.into_alternate_af5();
+
+            let mut cs = gpioc.pc13.into_push_pull_output();
+            let dc = gpioc.pc5.into_push_pull_output();
+            let rst = gpioc.pc4.into_push_pull_output();
+
+            cs.set_low().unwrap();
+
+            let spi = Spi::spi1(
+                device.SPI1,
+                (sck, miso, mosi),
+                MODE_0,
+                1000.khz().into(),
+                clocks,
+            );
+            Some(Display::new(spi, dc, rst))
+        } else {
+            None
+        };
+
+        #[cfg(feature = "bsec")]
+        let bsec = {
+            info!("BSEC version: {}", bsec::version());
+            let mut result = Bsec::new().unwrap().unwrap();
+            result
+                .update_subscription(
+                    SampleRate::LowPower,
+                    &[
+                        bsec::bsec_virtual_sensor_t::BSEC_OUTPUT_RAW_TEMPERATURE,
+                        bsec::bsec_virtual_sensor_t::BSEC_OUTPUT_RAW_PRESSURE,
+                        bsec::bsec_virtual_sensor_t::BSEC_OUTPUT_RAW_HUMIDITY,
+                        bsec::bsec_virtual_sensor_t::BSEC_OUTPUT_RAW_GAS,
+                        bsec::bsec_virtual_sensor_t::BSEC_OUTPUT_IAQ,
+                        bsec::bsec_virtual_sensor_t::BSEC_OUTPUT_STATIC_IAQ,
+                        bsec::bsec_virtual_sensor_t::BSEC_OUTPUT_CO2_EQUIVALENT,
+                        bsec::bsec_virtual_sensor_t::BSEC_OUTPUT_BREATH_VOC_EQUIVALENT,
+                        bsec::bsec_virtual_sensor_t::BSEC_OUTPUT_SENSOR_HEAT_COMPENSATED_TEMPERATURE,
+                        bsec::bsec_virtual_sensor_t::BSEC_OUTPUT_SENSOR_HEAT_COMPENSATED_HUMIDITY,
+                    ],
+                )
+                .unwrap();
+            info!("BSEC initialized");
+            result
+        };
+        #[cfg(not(feature = "bsec"))]
+        let bsec = {
+            info!("BSEC version: <disabled>");
+            ()
+        };
+
         info!("Spawn tasks");
 
         // spawn others
@@ -561,6 +807,15 @@ const APP: () = {
             ingress,
             ticker,
             sensor_i2c: Some(i2c),
+            display,
+            bsec,
+        }
+    }
+
+    #[idle]
+    fn idle(_: idle::Context) -> ! {
+        loop {
+            cortex_m::asm::nop()
         }
     }
 
@@ -592,8 +847,20 @@ const APP: () = {
        }
     */
 
-    #[task(resources=[sensor, sensor_i2c])]
+    #[task(resources = [sensor, sensor_i2c, display])]
     fn init_sensor(ctx: init_sensor::Context) {
+        #[cfg(feature = "display")]
+        {
+            log::info!("Init display...");
+            let mut delay = CLOCK.delay();
+            ctx.resources
+                .display
+                .as_mut()
+                .unwrap()
+                .init(&mut delay)
+                .unwrap();
+        }
+
         log::info!("Init sensor...");
 
         let i2c = ctx.resources.sensor_i2c.take().unwrap();
@@ -612,66 +879,112 @@ const APP: () = {
 
         log::info!("Controller initialized!");
 
+        if let Some(display) = ctx.resources.display {
+            display.set_state(State::Initialized);
+        }
+
         ctx.resources.sensor.replace(controller);
     }
 
-    #[task(schedule=[join], spawn=[update], resources = [adapter, network])]
+    #[task(schedule = [join], spawn = [update], resources = [adapter, network, display])]
     fn join(ctx: join::Context) {
-        log::info!("Joining network");
+        #[cfg(feature = "publish")]
+        {
+            log::info!("Joining network");
 
-        if ctx.resources.network.is_some() {
-            return;
-        }
-
-        if ctx.resources.adapter.is_none() {
-            panic!("No adapter and no network");
-        }
-
-        let mut adapter = ctx.resources.adapter.take().unwrap();
-
-        match try_join(&mut adapter) {
-            Ok(_) => {
-                // we joined the local Wi-Fi
-                info!("network initialized");
-                // convert the adapter into a TCP stack, this consumes the adapter instance
-                let network = adapter.into_network_stack();
-                // and wrap it with a TLS layer
-                let ssl = create_network(network).unwrap();
-                // store that in our context
-                ctx.resources.network.replace(ssl);
-
-                // joined ... update
-                ctx.spawn.update().unwrap();
+            if ctx.resources.network.is_some() {
+                return;
             }
-            Err(_) => {
-                warn!("Failed to join Wi-Fi, trying again later");
-                // we failed to join the local Wi-Fi, put back the adapter to try again later
-                ctx.resources.adapter.replace(adapter);
-                // try joining later
-                ctx.schedule
-                    .join(ctx.scheduled + 8_000_000.cycles())
-                    .unwrap();
+
+            if ctx.resources.adapter.is_none() {
+                panic!("No adapter and no network");
             }
+
+            if let Some(display) = ctx.resources.display {
+                display.set_state(State::Joining);
+            }
+
+            let mut adapter = ctx.resources.adapter.take().unwrap();
+
+            match try_join(&mut adapter) {
+                Ok(_) => {
+                    // we joined the local Wi-Fi
+                    info!("network initialized");
+                    // convert the adapter into a TCP stack, this consumes the adapter instance
+                    let network = adapter.into_network_stack();
+                    // and wrap it with a TLS layer
+                    let ssl = create_network(network).unwrap();
+                    // store that in our context
+                    ctx.resources.network.replace(ssl);
+
+                    if let Some(display) = ctx.resources.display {
+                        display.set_state(State::Joined);
+                    }
+
+                    // joined ... update
+                    ctx.spawn.update().unwrap();
+                }
+                Err(_) => {
+                    warn!("Failed to join Wi-Fi, trying again later");
+                    // we failed to join the local Wi-Fi, put back the adapter to try again later
+                    ctx.resources.adapter.replace(adapter);
+                    // try joining later
+                    ctx.schedule
+                        .join(ctx.scheduled + 8_000_000.cycles())
+                        .unwrap();
+                }
+            }
+        }
+        #[cfg(not(feature = "publish"))]
+        {
+            ctx.spawn.update().unwrap();
         }
     }
 
-    #[task(schedule=[update], resources = [network, sensor])]
+    #[task(spawn = [], schedule=[update], resources = [network, sensor, display, updates, bsec])]
     fn update(ctx: update::Context) {
         log::info!("Updating");
 
         let network: &mut Option<_> = ctx.resources.network;
         let sensor: &mut Option<Bme680> = ctx.resources.sensor;
-        // let sensor = &mut None;
+        let display: &mut Option<DisplayInstance> = ctx.resources.display;
 
-        perform_publish(network, sensor).ok();
+        let bsec: &mut Bsec = ctx.resources.bsec;
+
+        *ctx.resources.updates += 1;
+
+        if let Some(display) = display {
+            display.set_iter(*ctx.resources.updates);
+        }
+
+        log::info!("Start update");
+
+        perform_publish(
+            #[cfg(feature = "publish")]
+            network,
+            sensor,
+            display,
+            bsec,
+        )
+        .ok();
 
         // done publishing ... successful or not
 
         log::info!("Done updating ... schedule again");
 
+        // ctx.spawn.next_update().unwrap();
         ctx.schedule
-            .update(ctx.scheduled + 8_000_000.cycles())
+            .update(ctx.scheduled + 1_500_000_000u32.cycles())
             .unwrap();
+    }
+
+    // workaround, to scheduled x cycles after the publish job as finished, not x cycles after
+    // the publish job was started
+    #[task(schedule = [update])]
+    fn next_update(ctx: next_update::Context) {
+        log::info!("Schedule next update");
+        let cycles = (1_500_000_000u32).cycles();
+        //ctx.schedule.update(ctx.scheduled + cycles).unwrap();
     }
 
     #[cfg(any(feature = "stm32f4xx", feature = "stm32f7xx"))]
@@ -697,20 +1010,125 @@ const APP: () = {
     }
 };
 
+fn now() -> Milliseconds {
+    let now = CLOCK.try_now().unwrap();
+    let now = now.duration_since_epoch();
+    now.try_into().unwrap()
+}
+
+#[cfg(not(feature = "bsec"))]
 fn perform_publish(
-    network: &mut Option<NetworkStack>,
+    #[cfg(feature = "publish")] network: &mut Option<NetworkStack>,
     sensor: &mut Option<Bme680>,
+    display: &mut Option<DisplayInstance>,
+    bsec: &mut Bsec,
 ) -> Result<(), ThingError> {
-    // use resources
-    let network = network.as_mut().ok_or_else(|| ThingError::NotInitialized)?;
     let mut sensor = sensor.as_mut().ok_or_else(|| ThingError::NotInitialized)?;
+
+    if let Some(display) = display {
+        display.set_state(State::Measuring).ok();
+    }
+
+    let data = data::measure(sensor);
+    log::info!("Measured: {:?}", data);
+    let data = data.map_err(|_| ThingError::FailedToMeasure)?;
+
+    if let Some(display) = display {
+        display.set_temp(data.temperature).ok();
+    }
+
+    #[cfg(feature = "publish")]
+    {
+        let network = network.as_mut().ok_or_else(|| ThingError::NotInitialized)?;
+
+        // publish measurement
+        publish(network, data, display)?;
+    }
+
+    log::info!("Setting state");
+
+    if let Some(display) = display {
+        display.set_state(State::Done).ok();
+    }
+
+    log::info!("Done");
+
+    Ok(())
+}
+
+#[cfg(feature = "bsec")]
+fn perform_publish(
+    #[cfg(feature = "publish")] network: &mut Option<NetworkStack>,
+    sensor: &mut Option<Bme680>,
+    display: &mut Option<DisplayInstance>,
+    bsec: &mut Bsec,
+) -> Result<(), ThingError> {
+    let mut sensor = sensor.as_mut().ok_or_else(|| ThingError::NotInitialized)?;
+
+    if let Some(display) = display {
+        display.set_state(State::Measuring).ok();
+    }
+
+    loop {
+        let ts = now();
+        log::info!("Timestamp: {}", ts);
+        let result = bsec.sensor_control(ts);
+        log::info!("BSEC control: {:?}", &result);
+        if let Ok(control) = result {
+            log::info!("next: {}, ts: {}", control.next_call, ts);
+            if control.next_call > ts {
+                break;
+            }
+            bsec.process_data(ts, &Inputs::default());
+        }
+        // CLOCK.delay().delay(Milliseconds(10u32));
+    }
+    //let result = result.map_err(|_| ThingError::FailedToMeasure)?;
 
     // measure data
     let data = data::measure(&mut sensor)?;
     log::info!("Measured: {:?}", data);
 
-    // publish measurement
-    publish(network, data)?;
+    let ts = now();
+    log::info!("Timestamp: {}", ts);
+
+    let result = bsec.process_data(
+        ts,
+        &Inputs {
+            temperature: Some(data.temperature),
+            humidity: Some(data.humidity),
+            pressure: data.pressure,
+            gas_resistance: Some(data.gas_resistance),
+        },
+    );
+
+    log::info!("Back from BSEC: {:?}", result);
+
+    if let Some(display) = display {
+        display.set_temp(data.temperature).ok();
+
+        #[cfg(feature = "bsec")]
+        match result {
+            Ok(r) => display.set_details(&r),
+            Err(e) => display.set_details(&Outputs::default()),
+        };
+    }
+
+    #[cfg(feature = "publish")]
+    {
+        let network = network.as_mut().ok_or_else(|| ThingError::NotInitialized)?;
+
+        // publish measurement
+        publish(network, data, display)?;
+    }
+
+    log::info!("Setting state");
+
+    if let Some(display) = display {
+        display.set_state(State::Done).ok();
+    }
+
+    log::info!("Done");
 
     Ok(())
 }
